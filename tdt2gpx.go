@@ -5,8 +5,10 @@ import (
 	"encoding/xml"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/tkrajina/gpxgo/gpx"
 )
 
@@ -28,12 +30,18 @@ type PI struct {
 	Type   string   `json:"type"`
 }
 
+func init() {
+	spew.Config.DisableCapacities = true
+	spew.Config.Indent = "    "
+}
+
 func ParseScript(script string) (gpx.GPX, error) {
 	if !strings.Contains(script, "dataTrace:") {
 		return gpx.GPX{}, fmt.Errorf("No dataTrace found")
 	}
 
 	lines := strings.Split(script, "\n")
+	gpxFile := gpx.GPX{}
 	gpxSegment := gpx.GPXTrackSegment{}
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -43,6 +51,47 @@ func ParseScript(script string) (gpx.GPX, error) {
 			if err != nil {
 				return gpx.GPX{}, fmt.Errorf("Failed to unmarshal PIs: %v", err)
 			}
+			for _, pi := range pis {
+				abs, err := strconv.ParseFloat(pi.Abs, 64)
+				if err != nil {
+					continue
+				}
+				ord, err := strconv.ParseFloat(pi.Ord, 64)
+				if err != nil {
+					continue
+				}
+				elevation := gpx.NullableFloat64{}
+				ele, err := strconv.ParseFloat(pi.Y, 64)
+				if err == nil {
+					elevation.SetValue(ele)
+				}
+				lat, lon := mercatorToLatLon(abs, ord)
+				typ := ""
+				switch pi.Type {
+				case "ravitoc":
+					typ = "Food"
+				case "eau":
+					typ = "Water"
+				case "arrivee":
+					typ = "Finish"
+				case "depart":
+					typ = "Start"
+				}
+				name := pi.Name
+				if name == "" {
+					name = typ
+				}
+				gpxFile.AppendWaypoint(&gpx.GPXPoint{
+					Point: gpx.Point{
+						Latitude:  lat,
+						Longitude: lon,
+						Elevation: elevation,
+					},
+					Type: typ,
+					Name: name,
+				})
+			}
+			// spew.Dump(pis)
 		} else if line_, ok := strings.CutPrefix(line, `geometry:"`); ok {
 			var points []Point
 			err := parseScriptLine(line_, &points)
@@ -69,9 +118,9 @@ func ParseScript(script string) (gpx.GPX, error) {
 		}
 	}
 
-	return gpx.GPX{
-		Tracks: []gpx.GPXTrack{{Segments: []gpx.GPXTrackSegment{gpxSegment}}},
-	}, nil
+	gpxFile.Tracks = []gpx.GPXTrack{{Segments: []gpx.GPXTrackSegment{gpxSegment}}}
+
+	return gpxFile, nil
 }
 
 func parseScriptLine(line string, data any) error {
